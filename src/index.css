@@ -138,6 +138,33 @@ body {
   margin: 1rem 0;
 }
 
+.share-link-container {
+  background: var(--bg-secondary);
+  padding: 1rem;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 1.5rem 0;
+  border: 1px solid var(--card-back);
+}
+
+.share-link {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.copy-button {
+  padding: 0.5rem 1rem;
+  font-size: 0.8rem;
+  border-radius: 8px;
+}
+
 .setup {
   width: 100%;
   max-width: 800px;

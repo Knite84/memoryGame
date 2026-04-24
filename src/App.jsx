@@ -26,6 +26,7 @@ function App() {
   const playerIdRef = useRef('');
   const opponentIdRef = useRef(null);
   const wsRef = useRef(null);
+  const hasAutoJoinedRef = useRef(false);
 
   // Keep refs in sync with state
   useEffect(() => { playerIdRef.current = playerId; }, [playerId]);
@@ -53,6 +54,8 @@ function App() {
         localStorage.setItem('memoryGameId', msg.gameId);
         localStorage.setItem('memoryPlayerId', msg.playerId);
         setPage('setup');
+        // Update URL to include gameId
+        window.history.replaceState({}, '', `${window.location.pathname}?game=${msg.gameId}`);
         break;
 
       case 'joined':
@@ -62,6 +65,8 @@ function App() {
         localStorage.setItem('memoryGameId', msg.gameId);
         localStorage.setItem('memoryPlayerId', msg.playerId);
         setPage('waiting');
+        // Update URL to include gameId
+        window.history.replaceState({}, '', `${window.location.pathname}?game=${msg.gameId}`);
         break;
 
       case 'playerJoined':
@@ -142,22 +147,43 @@ function App() {
     setWs(newWs);
   };
 
-  const joinGame = () => {
-    if (!joinCode || joinCode.length !== 6) return;
-    console.log('Join Game clicked', joinCode);
+  const joinGame = useCallback((code) => {
+    const finalCode = (code || joinCode).toUpperCase();
+    if (!finalCode || finalCode.length !== 6) return;
+    
+    // If we're already connecting or connected to this same game, don't do it again
+    if (wsRef.current && (wsRef.current.readyState === 0 || wsRef.current.readyState === 1)) {
+      console.log('Already have an active connection');
+      return;
+    }
+
+    console.log('Join Game action', finalCode);
     const newWs = new WebSocket(WS_URL);
     newWs.onmessage = (event) => {
       const msg = JSON.parse(event.data);
       handleMessage(msg);
     };
     newWs.onopen = () => {
-      newWs.send(JSON.stringify({ type: 'join', gameId: joinCode.toUpperCase() }));
+      newWs.send(JSON.stringify({ type: 'join', gameId: finalCode }));
     };
     newWs.onclose = () => setWs(null);
     newWs.onerror = () => setError('Connection failed');
     wsRef.current = newWs;
     setWs(newWs);
-  };
+  }, [joinCode, handleMessage]);
+
+  // Auto-join from URL on mount
+  useEffect(() => {
+    if (hasAutoJoinedRef.current) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const gameParam = params.get('game');
+    if (gameParam && gameParam.length === 6) {
+      hasAutoJoinedRef.current = true;
+      setJoinCode(gameParam.toUpperCase());
+      joinGame(gameParam.toUpperCase());
+    }
+  }, [joinGame]);
 
   const handleImageUpload = (index, file) => {
     const reader = new FileReader();
@@ -361,6 +387,13 @@ function App() {
     });
   };
 
+  const copyLink = () => {
+    const url = `${window.location.origin}${window.location.pathname}?game=${gameId}`;
+    navigator.clipboard.writeText(url);
+    setStatus({ type: 'matched', text: 'Link copied to clipboard!' });
+    setTimeout(() => setStatus(null), 2000);
+  };
+
   const leaveGame = () => {
     sendMessage({ type: 'leave' });
     localStorage.clear();
@@ -372,6 +405,8 @@ function App() {
     setGameState(null);
     setStatus(null);
     if (ws) ws.close();
+    // Clear URL query params
+    window.history.replaceState({}, '', window.location.pathname);
   };
 
   if (error) {
@@ -439,7 +474,16 @@ function App() {
         <div className="setup">
           <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
             <div className="game-code-display">{gameId}</div>
-            <p className="info-text">Share this code with the other player to join</p>
+            <p className="info-text">Share this code or the link below to join</p>
+            
+            <div className="share-link-container">
+              <div className="share-link">
+                {`${window.location.origin}${window.location.pathname}?game=${gameId}`}
+              </div>
+              <button className="button copy-button" onClick={copyLink}>
+                Copy Link
+              </button>
+            </div>
           </div>
           <h2>Upload 8 Images (or use defaults)</h2>
           <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
