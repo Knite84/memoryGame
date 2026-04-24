@@ -121,7 +121,19 @@ function App() {
             setOpponentId(otherPlayer);
           }
         }
-        setGameState(msg.state);
+        // The server strips image data from gameState broadcasts to reduce
+        // payload size. Rehydrate each card's image from our local state so
+        // the board continues to render correctly.
+        setGameState(prev => {
+          const incoming = msg.state;
+          const rehydratedCards = incoming.cards
+            ? incoming.cards.map(c => ({
+                ...c,
+                image: prev?.cards?.find(lc => lc.id === c.id)?.image ?? c.image ?? ''
+              }))
+            : prev?.cards ?? [];
+          return { ...incoming, cards: rehydratedCards };
+        });
         break;
 
       case 'error':

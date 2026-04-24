@@ -76,6 +76,11 @@ wss.on('connection', (ws) => {
           if (message.type === 'uploadImages') {
             broadcastMessage.type = 'imagesUploaded';
             broadcastMessage.uploaderId = playerId;
+            // Keep images in the initial upload so the opponent can render cards
+          } else {
+            // Strip image payloads from ongoing gameState messages —
+            // the client already has the images and will rehydrate locally.
+            broadcastMessage.state = stripImages(broadcastMessage.state);
           }
           
           console.log('Broadcasting to other players:', broadcastMessage.type);
@@ -152,6 +157,17 @@ function generateGameCode() {
 
 function generatePlayerId() {
   return 'p' + Math.random().toString(36).substr(2, 9);
+}
+
+// Remove base64 image data from card objects before broadcasting gameState.
+// Clients already hold the images locally; sending them on every flip is
+// the primary cause of production latency (~28 s with user photos).
+function stripImages(state) {
+  if (!state || !state.cards) return state;
+  return {
+    ...state,
+    cards: state.cards.map(({ image, ...rest }) => rest)
+  };
 }
 
 console.log('WebSocket server running on ws://localhost:8080');
