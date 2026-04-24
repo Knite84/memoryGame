@@ -1,0 +1,9 @@
+node_modules
+dist
+build
+.git
+.gitignore
+.env
+*.pem
+*.md
+local_launch_notes.txt

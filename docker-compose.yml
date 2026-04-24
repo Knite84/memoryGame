@@ -1,0 +1,28 @@
+services:
+
+  # ── Node WebSocket server ────────────────────────────────────
+  ws-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    container_name: memory-ws
+    restart: unless-stopped
+    # Port 8080 is NOT exposed to the host — only Nginx talks to it
+    expose:
+      - "8080"
+
+  # ── Nginx  (static frontend + WS proxy) ─────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: memory-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"       # HTTP — change to "443:443" if you add TLS
+    depends_on:
+      - ws-server
+
+networks:
+  default:
+    name: memory-game-net
