@@ -294,14 +294,35 @@ function App() {
             cards: newCards,
             scores: newScores,
             flippedCards: [],
-            phase: allMatched ? 'finished' : 'playing',
-            winner,
+            phase: 'playing',
+            winner: null,
             currentTurn: currentPlayerId // keep turn on match
           };
 
-          setStatus({ type: 'matched', text: 'Match found! Go again!' });
-          setTimeout(() => setStatus(null), 1500);
-          sendMessage({ type: 'gameState', state: newState });
+          if (allMatched) {
+            setStatus({ type: 'matched', text: 'All matches found!' });
+            sendMessage({ type: 'gameState', state: newState });
+
+            // Delay the "Game Over" state to let the user see the final cards
+            setTimeout(() => {
+              setGameState(gs => {
+                if (!gs) return gs;
+                const finalState = {
+                  ...gs,
+                  phase: 'finished',
+                  winner
+                };
+                sendMessage({ type: 'gameState', state: finalState });
+                return finalState;
+              });
+              setStatus(null);
+            }, 1500);
+          } else {
+            setStatus({ type: 'matched', text: 'Match found! Go again!' });
+            setTimeout(() => setStatus(null), 1500);
+            sendMessage({ type: 'gameState', state: newState });
+          }
+
           return newState;
         } else {
           // No match — pass turn
