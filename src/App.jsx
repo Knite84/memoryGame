@@ -9,6 +9,26 @@ const WS_URL = import.meta.env.DEV
 
 const DEFAULT_EMOJIS = ['🍎', '🍊', '🍋', '🍇', '🍓', '🍒', '🥝', '🍑'];
 
+// Resize + re-encode to JPEG at 70% quality, max 350×350px
+function compressImage(file) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const MAX = 350;
+      const scale = Math.min(MAX / img.width, MAX / img.height, 1);
+      const canvas = document.createElement('canvas');
+      canvas.width  = Math.round(img.width  * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url); // clean up the object URL
+      resolve(canvas.toDataURL('image/jpeg', 0.70));
+    };
+    img.src = url;
+  });
+}
+
 function App() {
   const [page, setPage] = useState('landing');
   const [ws, setWs] = useState(null);
@@ -160,7 +180,7 @@ function App() {
   };
 
   const joinGame = useCallback((code) => {
-    const finalCode = (code || joinCode).toUpperCase();
+    const finalCode = (typeof code === 'string' ? code : joinCode).toUpperCase();
     if (!finalCode || finalCode.length !== 6) return;
     
     // If we're already connecting or connected to this same game, don't do it again
@@ -197,36 +217,21 @@ function App() {
     }
   }, [joinGame]);
 
-  const handleImageUpload = (index, file) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      setImages(prev => {
-        const newImages = [...prev];
-        newImages[index] = e.target.result;
-        return newImages;
-      });
-    };
-    reader.readAsDataURL(file);
+  const handleImageUpload = async (index, file) => {
+    const compressed = await compressImage(file);
+    setImages(prev => {
+      const newImages = [...prev];
+      newImages[index] = compressed;
+      return newImages;
+    });
   };
 
-  const handleBulkUpload = (e) => {
+  const handleBulkUpload = async (e) => {
     const files = Array.from(e.target.files).slice(0, 8);
     if (files.length === 0) return;
 
-    let loaded = 0;
-    const newImages = new Array(files.length);
-
-    files.forEach((file, idx) => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        newImages[idx] = e.target.result;
-        loaded++;
-        if (loaded === files.length) {
-          setImages(newImages);
-        }
-      };
-      reader.readAsDataURL(file);
-    });
+    const compressedImages = await Promise.all(files.map(compressImage));
+    setImages(compressedImages);
   };
 
   const startGame = () => {
