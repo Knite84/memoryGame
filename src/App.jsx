@@ -74,6 +74,7 @@ function App() {
         localStorage.setItem('memoryGameId', msg.gameId);
         localStorage.setItem('memoryPlayerId', msg.playerId);
         setPage('setup');
+        setStatus({ type: 'waiting', text: 'Waiting for opponent...' });
         // Update URL to include gameId
         window.history.replaceState({}, '', `${window.location.pathname}?game=${msg.gameId}`);
         break;
@@ -93,7 +94,7 @@ function App() {
         console.log('Player joined:', msg.playerId);
         opponentIdRef.current = msg.playerId;
         setOpponentId(msg.playerId);
-        setStatus({ type: 'joined', text: 'Player joined!' });
+        setStatus({ type: 'joined', text: 'Player joined! Ready to start.' });
         setGameState(prev => {
           if (!prev) return prev;
           return {
@@ -102,7 +103,6 @@ function App() {
             scores: { ...prev.scores, [msg.playerId]: 0 }
           };
         });
-        setTimeout(() => setStatus(null), 2000);
         break;
 
       case 'imagesUploaded':
@@ -263,6 +263,7 @@ function App() {
 
     setGameState(sharedState);
     setPage('game');
+    setStatus(null); // Clear setup status when game starts
 
     const socket = wsRef.current;
     if (socket && socket.readyState === 1) {
@@ -504,6 +505,13 @@ function App() {
               </button>
             </div>
           </div>
+
+          {status && (
+            <div className={`status-message ${status.type}`} style={{ marginBottom: '1.5rem' }}>
+              {status.text}
+            </div>
+          )}
+
           <h2>Upload 8 Images (or use defaults)</h2>
           <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
             <label className="button secondary" style={{ display: 'inline-block', cursor: 'pointer' }}>
