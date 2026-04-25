@@ -474,6 +474,7 @@ function App() {
   if (page === 'waiting') {
     return (
       <div className="app">
+        <button className="button secondary back-button" onClick={leaveGame}>Back</button>
         <h1 className="title">Waiting</h1>
         <div className="waiting">
           <div className="spinner"></div>
@@ -487,6 +488,7 @@ function App() {
   if (page === 'setup') {
     return (
       <div className="app">
+        <button className="button secondary back-button" onClick={leaveGame}>Back</button>
         <h1 className="title">Setup Game</h1>
         <div className="setup">
           <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
