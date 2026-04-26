@@ -22,7 +22,7 @@ function compressImage(file) {
       canvas.height = Math.round(img.height * scale);
       const ctx = canvas.getContext('2d');
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      URL.revokeObjectURL(url); // clean up the object URL
+      URL.revokeObjectURL(url);
       resolve(canvas.toDataURL('image/jpeg', 0.70));
     };
     img.src = url;
@@ -40,6 +40,7 @@ function App() {
   const [error, setError] = useState('');
   const [status, setStatus] = useState(null);
   const [opponentId, setOpponentId] = useState(null);
+  const [isReconnecting, setIsReconnecting] = useState(false);
 
   // Refs so WebSocket message handler always sees current values
   // without stale closures
@@ -62,7 +63,7 @@ function App() {
 
   // handleMessage reads identity from refs, not captured state
   const handleMessage = useCallback((msg) => {
-    console.log('handleMessage received:', msg);
+    console.log('handleMessage received:', msg.type);
     const currentPlayerId = playerIdRef.current;
     const currentOpponentId = opponentIdRef.current;
 
@@ -75,7 +76,6 @@ function App() {
         localStorage.setItem('memoryPlayerId', msg.playerId);
         setPage('setup');
         setStatus({ type: 'waiting', text: 'Waiting for opponent...' });
-        // Update URL to include gameId
         window.history.replaceState({}, '', `${window.location.pathname}?game=${msg.gameId}`);
         break;
 
@@ -86,9 +86,44 @@ function App() {
         localStorage.setItem('memoryGameId', msg.gameId);
         localStorage.setItem('memoryPlayerId', msg.playerId);
         setPage('waiting');
-        // Update URL to include gameId
         window.history.replaceState({}, '', `${window.location.pathname}?game=${msg.gameId}`);
         break;
+
+      // -----------------------------------------------------------------------
+      // RECONNECTED — Server confirmed our reconnect. Restore the correct view.
+      // -----------------------------------------------------------------------
+      case 'reconnected': {
+        setIsReconnecting(false);
+        playerIdRef.current = msg.playerId;
+        setPlayerId(msg.playerId);
+        setGameId(msg.gameId);
+        // Keep localStorage fresh
+        localStorage.setItem('memoryGameId', msg.gameId);
+        localStorage.setItem('memoryPlayerId', msg.playerId);
+        window.history.replaceState({}, '', `${window.location.pathname}?game=${msg.gameId}`);
+
+        if (msg.gameState) {
+          // Game was already in progress — restore the board
+          if (msg.images) setImages(msg.images);
+          setGameState(msg.gameState);
+          // Restore opponentId from the cached state
+          const otherPlayer = (msg.gameState.players || []).find(p => p !== msg.playerId);
+          if (otherPlayer) {
+            opponentIdRef.current = otherPlayer;
+            setOpponentId(otherPlayer);
+          }
+          setPage('game');
+        } else if (msg.role === 'creator') {
+          setPage('setup');
+          setStatus({
+            type: msg.players >= 2 ? 'joined' : 'waiting',
+            text: msg.players >= 2 ? 'Player joined! Ready to start.' : 'Waiting for opponent...'
+          });
+        } else {
+          setPage('waiting');
+        }
+        break;
+      }
 
       case 'playerJoined':
         console.log('Player joined:', msg.playerId);
@@ -120,13 +155,32 @@ function App() {
         }
         break;
 
-      case 'playerLeft':
+      // -----------------------------------------------------------------------
+      // PLAYERRECONNECTED — The other player came back. Show a soft banner.
+      // -----------------------------------------------------------------------
+      case 'playerReconnected':
+        setStatus({ type: 'joined', text: 'Opponent reconnected!' });
+        setTimeout(() => setStatus(null), 2500);
+        break;
+
+      // -----------------------------------------------------------------------
+      // PLAYERDISCONNECTED — Soft event; opponent's tab suspended.
+      // Keep game state intact so both sides can resume when they come back.
+      // -----------------------------------------------------------------------
       case 'playerDisconnected':
-        setStatus({ type: 'error', text: 'Other player disconnected' });
+        setStatus({ type: 'error', text: 'Opponent disconnected — waiting for them to reconnect...' });
+        break;
+
+      // -----------------------------------------------------------------------
+      // PLAYERLEFT — Hard exit (explicit "Back" / "Leave" button press).
+      // -----------------------------------------------------------------------
+      case 'playerLeft':
+        setStatus({ type: 'error', text: 'Other player left the game.' });
         setTimeout(() => {
           localStorage.clear();
           setPage('landing');
           setGameState(null);
+          setStatus(null);
         }, 2000);
         break;
 
@@ -158,51 +212,80 @@ function App() {
 
       case 'error':
         setError(msg.message);
+        setIsReconnecting(false);
         break;
     }
   }, []); // no deps — reads from refs
 
-  const createGame = () => {
-    console.log('Create Game clicked');
+  // -------------------------------------------------------------------------
+  // connectWS — Shared helper that opens a WebSocket and wires up handlers.
+  // The caller provides an onOpen callback to send the first message.
+  // -------------------------------------------------------------------------
+  const connectWS = useCallback((onOpen) => {
     const newWs = new WebSocket(WS_URL);
     newWs.onmessage = (event) => {
       const msg = JSON.parse(event.data);
       handleMessage(msg);
     };
-    newWs.onopen = () => {
-      console.log('WebSocket connected, sending create');
-      newWs.send(JSON.stringify({ type: 'create' }));
-    };
+    newWs.onopen = () => onOpen(newWs);
     newWs.onclose = () => setWs(null);
-    newWs.onerror = () => setError('Connection failed');
+    newWs.onerror = () => {
+      setError('Connection failed');
+      setIsReconnecting(false);
+    };
     wsRef.current = newWs;
     setWs(newWs);
+    return newWs;
+  }, [handleMessage]);
+
+  const createGame = () => {
+    console.log('Create Game clicked');
+    connectWS((sock) => sock.send(JSON.stringify({ type: 'create' })));
   };
 
   const joinGame = useCallback((code) => {
     const finalCode = (typeof code === 'string' ? code : joinCode).toUpperCase();
     if (!finalCode || finalCode.length !== 6) return;
-    
-    // If we're already connecting or connected to this same game, don't do it again
+
+    // Don't open a second connection if one is already active
     if (wsRef.current && (wsRef.current.readyState === 0 || wsRef.current.readyState === 1)) {
       console.log('Already have an active connection');
       return;
     }
 
     console.log('Join Game action', finalCode);
-    const newWs = new WebSocket(WS_URL);
-    newWs.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
-      handleMessage(msg);
+    connectWS((sock) => sock.send(JSON.stringify({ type: 'join', gameId: finalCode })));
+  }, [joinCode, connectWS]);
+
+  // -------------------------------------------------------------------------
+  // tryReconnect — Called when the tab regains focus. If the socket is dead
+  // but we have saved credentials, re-attach to the existing game session.
+  // -------------------------------------------------------------------------
+  const tryReconnect = useCallback(() => {
+    const savedGameId = localStorage.getItem('memoryGameId');
+    const savedPlayerId = localStorage.getItem('memoryPlayerId');
+    if (!savedGameId || !savedPlayerId) return;
+
+    const sock = wsRef.current;
+    if (sock && (sock.readyState === 0 || sock.readyState === 1)) return; // already alive
+
+    console.log('Tab refocused — reconnecting to game', savedGameId);
+    setIsReconnecting(true);
+    connectWS((newSock) => {
+      newSock.send(JSON.stringify({ type: 'reconnect', gameId: savedGameId, playerId: savedPlayerId }));
+    });
+  }, [connectWS]);
+
+  // Listen for the tab becoming visible again (mobile app-switch scenario)
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        tryReconnect();
+      }
     };
-    newWs.onopen = () => {
-      newWs.send(JSON.stringify({ type: 'join', gameId: finalCode }));
-    };
-    newWs.onclose = () => setWs(null);
-    newWs.onerror = () => setError('Connection failed');
-    wsRef.current = newWs;
-    setWs(newWs);
-  }, [joinCode, handleMessage]);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [tryReconnect]);
 
   // Auto-join from URL on mount
   useEffect(() => {
@@ -263,7 +346,7 @@ function App() {
 
     setGameState(sharedState);
     setPage('game');
-    setStatus(null); // Clear setup status when game starts
+    setStatus(null);
 
     const socket = wsRef.current;
     if (socket && socket.readyState === 1) {
@@ -276,8 +359,6 @@ function App() {
   };
 
   const flipCard = (cardId) => {
-    // Use functional update so we always operate on the latest state,
-    // avoiding stale closure reads entirely.
     setGameState(prev => {
       if (!prev) return prev;
       const currentPlayerId = playerIdRef.current;
@@ -340,22 +421,17 @@ function App() {
             flippedCards: [],
             phase: 'playing',
             winner: null,
-            currentTurn: currentPlayerId // keep turn on match
+            currentTurn: currentPlayerId
           };
 
           if (allMatched) {
             setStatus({ type: 'matched', text: 'All matches found!' });
             sendMessage({ type: 'gameState', state: newState });
 
-            // Delay the "Game Over" state to let the user see the final cards
             setTimeout(() => {
               setGameState(gs => {
                 if (!gs) return gs;
-                const finalState = {
-                  ...gs,
-                  phase: 'finished',
-                  winner
-                };
+                const finalState = { ...gs, phase: 'finished', winner };
                 sendMessage({ type: 'gameState', state: finalState });
                 return finalState;
               });
@@ -375,13 +451,12 @@ function App() {
 
           const newState = {
             ...prev,
-            flippedCards: newFlipped, // briefly show both cards
+            flippedCards: newFlipped,
             currentTurn: nextPlayer
           };
 
           setStatus({ type: 'mismatch', text: 'No match. Passing turn...' });
 
-          // After a short delay, clear the flipped cards
           setTimeout(() => {
             setGameState(gs => {
               if (!gs) return gs;
@@ -392,7 +467,6 @@ function App() {
             setStatus(null);
           }, 2000);
 
-          // Immediately broadcast the "both flipped" state so opponent can see
           sendMessage({ type: 'gameState', state: newState });
           return newState;
         }
@@ -422,8 +496,8 @@ function App() {
     setImages([]);
     setGameState(null);
     setStatus(null);
+    setIsReconnecting(false);
     if (ws) ws.close();
-    // Clear URL query params
     window.history.replaceState({}, '', window.location.pathname);
   };
 
@@ -439,9 +513,18 @@ function App() {
     );
   }
 
+  // Reconnecting overlay banner (shown while re-attaching to a game session)
+  const ReconnectingBanner = isReconnecting ? (
+    <div className="reconnecting-banner">
+      <div className="spinner" style={{ width: '1rem', height: '1rem', marginRight: '0.5rem' }}></div>
+      Reconnecting to your game...
+    </div>
+  ) : null;
+
   if (page === 'landing') {
     return (
       <div className="app">
+        {ReconnectingBanner}
         <h1 className="title">Memory Game</h1>
         <div className="landing">
           <button className="button" onClick={createGame}>Create Game</button>
@@ -454,6 +537,7 @@ function App() {
   if (page === 'join') {
     return (
       <div className="app">
+        {ReconnectingBanner}
         <h1 className="title">Join Game</h1>
         <div className="join-form">
           <input
@@ -475,6 +559,7 @@ function App() {
   if (page === 'waiting') {
     return (
       <div className="app">
+        {ReconnectingBanner}
         <button className="button secondary back-button" onClick={leaveGame}>Back</button>
         <h1 className="title">Waiting</h1>
         <div className="waiting">
@@ -489,13 +574,14 @@ function App() {
   if (page === 'setup') {
     return (
       <div className="app">
+        {ReconnectingBanner}
         <button className="button secondary back-button" onClick={leaveGame}>Back</button>
         <h1 className="title">Setup Game</h1>
         <div className="setup">
           <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
             <div className="game-code-display">{gameId}</div>
             <p className="info-text">Share this code or the link below to join</p>
-            
+
             <div className="share-link-container">
               <div className="share-link">
                 {`${window.location.origin}${window.location.pathname}?game=${gameId}`}
@@ -564,6 +650,7 @@ function App() {
 
     return (
       <div className="app">
+        {ReconnectingBanner}
         <button className="button secondary back-button" onClick={leaveGame}>Leave</button>
         <h1 className="title">Memory Game</h1>
 
