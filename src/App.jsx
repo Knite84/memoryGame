@@ -48,6 +48,8 @@ function App() {
   const opponentIdRef = useRef(null);
   const wsRef = useRef(null);
   const hasAutoJoinedRef = useRef(false);
+  const isLeavingRef = useRef(false);   // true during an explicit leaveGame — suppresses auto-reconnect
+  const tryReconnectRef = useRef(null); // forward-ref so connectWS.onclose can call tryReconnect
 
   // Keep refs in sync with state
   useEffect(() => { playerIdRef.current = playerId; }, [playerId]);
@@ -114,12 +116,22 @@ function App() {
           }
           setPage('game');
         } else if (msg.role === 'creator') {
+          // Restore opponentId so startGame builds the correct players array
+          if (msg.otherPlayers && msg.otherPlayers.length > 0) {
+            opponentIdRef.current = msg.otherPlayers[0];
+            setOpponentId(msg.otherPlayers[0]);
+          }
           setPage('setup');
           setStatus({
             type: msg.players >= 2 ? 'joined' : 'waiting',
             text: msg.players >= 2 ? 'Player joined! Ready to start.' : 'Waiting for opponent...'
           });
         } else {
+          // Joiner — also restore opponentId if available
+          if (msg.otherPlayers && msg.otherPlayers.length > 0) {
+            opponentIdRef.current = msg.otherPlayers[0];
+            setOpponentId(msg.otherPlayers[0]);
+          }
           setPage('waiting');
         }
         break;
@@ -228,7 +240,16 @@ function App() {
       handleMessage(msg);
     };
     newWs.onopen = () => onOpen(newWs);
-    newWs.onclose = () => setWs(null);
+    newWs.onclose = () => {
+      setWs(null);
+      // If this wasn't an intentional leave, attempt to reconnect automatically.
+      // This handles the case where the WS drops while the tab is visible
+      // (e.g. network hiccup, server restart, mobile connection timeout) —
+      // visibilitychange alone won't fire in that scenario.
+      if (!isLeavingRef.current) {
+        setTimeout(() => tryReconnectRef.current?.(), 1500);
+      }
+    };
     newWs.onerror = () => {
       setError('Connection failed');
       setIsReconnecting(false);
@@ -265,16 +286,20 @@ function App() {
     const savedGameId = localStorage.getItem('memoryGameId');
     const savedPlayerId = localStorage.getItem('memoryPlayerId');
     if (!savedGameId || !savedPlayerId) return;
+    if (isLeavingRef.current) return; // don't reconnect after an explicit leave
 
     const sock = wsRef.current;
     if (sock && (sock.readyState === 0 || sock.readyState === 1)) return; // already alive
 
-    console.log('Tab refocused — reconnecting to game', savedGameId);
+    console.log('Reconnecting to game', savedGameId);
     setIsReconnecting(true);
     connectWS((newSock) => {
       newSock.send(JSON.stringify({ type: 'reconnect', gameId: savedGameId, playerId: savedPlayerId }));
     });
   }, [connectWS]);
+
+  // Keep the forward-ref current so the onclose handler always calls the latest version
+  tryReconnectRef.current = tryReconnect;
 
   // Listen for the tab becoming visible again (mobile app-switch scenario)
   useEffect(() => {
@@ -487,18 +512,23 @@ function App() {
   };
 
   const leaveGame = () => {
+    isLeavingRef.current = true; // suppress auto-reconnect in the onclose handler
     sendMessage({ type: 'leave' });
     localStorage.clear();
     setPage('landing');
     setGameId('');
     setPlayerId('');
     playerIdRef.current = '';
+    opponentIdRef.current = null;
+    setOpponentId(null);
     setImages([]);
     setGameState(null);
     setStatus(null);
     setIsReconnecting(false);
     if (ws) ws.close();
     window.history.replaceState({}, '', window.location.pathname);
+    // Reset so a future createGame/joinGame can reconnect if needed
+    setTimeout(() => { isLeavingRef.current = false; }, 100);
   };
 
   if (error) {

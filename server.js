@@ -97,6 +97,8 @@ wss.on('connection', (ws) => {
             playerId: message.playerId,
             role: slot.role,
             players: game.players.length,
+            // IDs of the other players in the game — lets the client restore opponentId
+            otherPlayers: game.players.filter(p => p.id !== message.playerId).map(p => p.id),
           };
           if (game.cachedGameState) reconnectedMsg.gameState = game.cachedGameState;
           if (game.cachedImages)    reconnectedMsg.images = game.cachedImages;
